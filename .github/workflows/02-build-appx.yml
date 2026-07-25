@@ -3,7 +3,8 @@ name: 02 - Build appxbundle (Windows 10 Mobile)
 # Runs automatically on every push that touches uwp/, and can also be
 # triggered manually from the Actions tab. Produces the .appxbundle ready
 # for sideload, published to app/ so app/index.html always links the latest
-# build.
+# build, and deploys app/ to GitHub Pages so it can be downloaded directly
+# from the phone's browser.
 on:
   push:
     branches: [main]
@@ -14,10 +15,19 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: windows-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -89,3 +99,15 @@ jobs:
             git commit -m "chore: update app/app.appxbundle and app/version.json (automated)"
             git push
           }
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Package app/ as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: app
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
