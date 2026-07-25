@@ -10,3 +10,10 @@ BundleArtifacts/
 # Windows
 Thumbs.db
 desktop.ini
+
+# Android / Gradle
+android/**/build/
+android/**/.gradle/
+android/**/local.properties
+android/.idea/
+*.iml

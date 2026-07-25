@@ -1,9 +1,11 @@
 # Kobo Page Turner
 
-A Windows 10 Mobile UWP app that turns a phone into a Bluetooth page-turner
-remote for Kobo e-readers. **100% native UWP (C#/XAML)** — no cross-platform
-framework, no WebView. Target device for development/testing: a **Lumia
-950 XL**.
+A phone app that turns a phone into a Bluetooth page-turner remote for Kobo
+e-readers, by advertising the phone as a BLE HID keyboard. **Active
+platform: native Android (Kotlin)**, target device **Samsung S25 Ultra**.
+
+**UWP is a confirmed dead end — do not resurrect it.** See "UWP history"
+below before touching `uwp/`.
 
 ## How it works
 
@@ -13,22 +15,10 @@ presses (Left/Right arrow by default, remappable in the Kobo's own Reading
 settings). No jailbreak or Kobo-side modification needed — the Kobo just
 needs to see the phone as a keyboard.
 
-So this app makes the phone act as a **BLE peripheral** advertising a
-HID-over-GATT (HOGP) keyboard service (`Windows.Devices.Bluetooth
-.GenericAttributeProfile.GattServiceProvider`, requires Windows 10 Creators
-Update / build 10.0.15063.0+). This is the opposite role from what most BLE
-apps use (central/client) — implemented from the Bluetooth SIG HOGP spec
-directly in `Services/BleKeyboardService.cs`, since no ready-made UWP C#
-example exists (Arduino/ESP32 equivalents rely on a library not available
-here).
-
-**Known risk**: whether a given phone's Bluetooth radio/driver actually
-supports peripheral role is hardware-dependent
-(`BluetoothAdapter.IsPeripheralRoleSupported`) and can only be confirmed by
-running the app — there is no fallback within UWP if it's unsupported (the
-Kobo only pairs with things that look like keyboards). See
-`kobo-pageturner-progresso.md` (if present) or ask Rod for the current
-status of that check on the 950 XL.
+So the app makes the phone act as a **BLE peripheral** advertising a
+HID-over-GATT (HOGP) keyboard service — the opposite role from what most
+BLE apps use (central/client). Implemented directly from the Bluetooth SIG
+HOGP spec (no ready-made example existed for either platform we tried).
 
 Reference projects that informed this design (credited in README.md):
 - https://github.com/tylpk1216/KoboPageTurner — runs on a jailbroken Kobo,
@@ -38,51 +28,87 @@ Reference projects that informed this design (credited in README.md):
   approach used here either.
 - https://github.com/tkanov/esp32-bluetooth-remote-kobo — the model for
   this app: an ESP32 emulating a BLE HID keyboard, no Kobo modification
-  needed. This is what we're replicating on Windows 10 Mobile.
+  needed. This is what we're replicating on a phone.
+- https://github.com/kshoji/BLE-HID-Peripheral-for-Android — proof this
+  works on Android specifically (Apache 2.0), consulted for feasibility
+  before building `BlePeripheralService.kt` (which is our own
+  implementation, not a copy of this library).
 
-## Project layout
+## UWP history (dead end — read before touching `uwp/`)
+
+The original attempt was 100% native UWP (C#/XAML) targeting Windows 10
+Mobile (Lumia 830, later a Lumia 950 XL). It got as far as installing and
+launching correctly (`Services/BleKeyboardService.cs`, HID-over-GATT via
+`GattServiceProvider`), but every attempt to create the Device Information
+or HID GATT service failed with `BluetoothError.DisabledByPolicy`.
+
+Root cause (confirmed via Microsoft's own docs,
+`windows-apps-src/devices-sensors/gatt-server.md`): **Windows reserves
+Device Information, GATT, GAP, HID (HOGP), and Scan Parameters services —
+third-party apps cannot publish them locally, by design, no workaround.**
+This blocks the entire "phone pretends to be a BLE keyboard" mechanism on
+Windows, on any device, not just this Lumia's hardware/drivers.
+
+The `uwp/KoboPageTurnerUWP/` project and its CI workflows
+(`01-generate-cert.yml`, `02-build-appx.yml`) are kept in the repo for
+reference/history — **do not spend time debugging or extending them**,
+the blocker is a platform policy, not a bug. If Windows/UWP ever becomes
+relevant again, re-verify this restriction is still current before
+resuming work (check the same MS docs page for updates).
+
+## Android project layout
 
 ```
-uwp/KoboPageTurnerUWP/
-├── App.xaml(.cs)
-├── MainPage.xaml(.cs)      ← the whole UI (status + Previous/Next buttons)
-├── Services/
-│   └── BleKeyboardService.cs   ← HOGP peripheral implementation
-├── Package.appxmanifest
-└── KoboPageTurnerUWP.csproj    ← old-style, no wildcards for code files —
-                                   every new .xaml/.xaml.cs/.cs needs a
-                                   manual <Compile>/<Page> entry or the
-                                   build silently skips it
+android/KoboPageTurner/
+├── settings.gradle.kts / build.gradle.kts / gradle.properties  ← root
+└── app/
+    ├── build.gradle.kts       ← namespace com.rodcarvalho.kobopageturner,
+    │                             minSdk 26, compileSdk/targetSdk 35
+    ├── src/main/AndroidManifest.xml
+    └── src/main/java/com/rodcarvalho/kobopageturner/
+        ├── MainActivity.kt        ← Compose UI: tap/swipe zones, status
+        │                             dot, info/restart icon buttons
+        └── BlePeripheralService.kt ← the actual HOGP peripheral: GATT
+                                        server (Device Info + Battery +
+                                        HID services), advertising, key
+                                        press/release notify
 app/
-└── index.html               ← download page, reads version.json
+├── index.html          ← download page for both platforms
+├── kobopageturner.apk / android-version.json   ← generated by workflow 03
+└── app.appxbundle / version.json               ← generated by workflow 02
+                                                    (UWP, dead end, kept for
+                                                    reference)
 .github/workflows/
-├── 01-generate-cert.yml     ← run once manually, generates the sideload cert
-└── 02-build-appx.yml        ← runs on push to uwp/**, builds the appxbundle
+├── 01-generate-cert.yml   ← UWP only, dead end
+├── 02-build-appx.yml      ← UWP only, dead end
+└── 03-build-apk.yml       ← active: runs on push to android/**, builds a
+                               debug APK via Gradle on ubuntu-latest, no
+                               signing/cert dance needed (Android sideload
+                               just needs "install unknown apps" allowed)
 ```
 
-## Conventions carried over from the theartistsway UWP project
+No Gradle wrapper is committed on purpose (no local Android SDK/JDK/Gradle
+on this machine either — same "CI is the only real build check" situation
+as UWP had). Workflow 03 uses `gradle/actions/setup-gradle@v4` to provision
+Gradle 8.10.2 directly. If Android Studio gets installed locally later, it
+will offer to generate the wrapper automatically — no need to do it by hand.
+
+## Conventions
 
 - **Never write literal `--` anywhere in code** (comments included) — use
-  `—` (em dash) instead. Validate XML files before committing:
-  `python -c "import xml.dom.minidom as m; m.parse('file')"`.
-- **Every change to `uwp/KoboPageTurnerUWP` needs a version bump** in
-  `Package.appxmanifest` (`Identity/@Version`).
-- **`KoboPageTurnerUWP.csproj` is old-style, no wildcards** for `.xaml`/
-  `.xaml.cs`/`.cs` — new files need a manual `<Compile Include>` /
-  `<Page Include>` entry or the build silently skips them.
-- **UWP doesn't build outside Windows with the UWP workload installed.**
-  This machine has VS2022 BuildTools but not the "Universal Windows
-  Platform development" workload, so local MSBuild can't compile this
-  either — validate by careful reading + XML validation locally, and rely
-  on the `windows-latest` GitHub Actions runner (workflow 02) for the real
-  compiler check.
-- **Standard flow for every change**: finish, validate XML locally, commit
-  and push to `main` right away, then watch Actions
-  (`gh run list --branch main --limit 1` / `gh run watch <id>`) until it
-  finishes; if it fails, read the log (`gh run view <id> --log-failed`),
-  fix, and re-push.
-- `app/app.appxbundle` and `app/version.json` are **generated by workflow
-  02** (reads the version from `Package.appxmanifest`, builds, overwrites
-  both files, commits+pushes automatically) — never hand-edit them.
-  Workflow 01 (cert generation) only needs to run once; re-run only to
-  rotate the certificate.
+  `—` (em dash) instead. This bit us once already in this exact repo (an
+  XAML comment broke the XML parser). Validate XML files before committing:
+  `python -c "import xml.dom.minidom as m; m.parse('file')"`. There's no
+  equivalent quick syntax check for Kotlin without a local JDK/Gradle —
+  read carefully, rely on CI.
+- **Standard flow for every change**: finish, validate what can be
+  validated locally, commit and push to `main` right away, then watch
+  Actions (`gh run list --branch main --limit 1` / `gh run watch <id>`)
+  until it finishes; if it fails, read the log
+  (`gh run view <id> --log-failed`), fix, and re-push.
+- `app/kobopageturner.apk` and `app/android-version.json` are **generated
+  by workflow 03** — never hand-edit them.
+- The BLE HID report descriptor (standard USB HID Boot Keyboard, Report ID
+  1) is duplicated between `BlePeripheralService.kt` and the retired
+  `uwp/KoboPageTurnerUWP/Services/BleKeyboardService.cs` — keep them in
+  sync if it ever needs to change, though only the Android one is live.

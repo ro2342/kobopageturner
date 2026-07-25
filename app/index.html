@@ -14,6 +14,11 @@
     }
     h1 {
       font-size: 1.3rem;
+      margin-bottom: 4px;
+    }
+    h2 {
+      font-size: 1.05rem;
+      margin-top: 32px;
     }
     a.download {
       display: block;
@@ -24,7 +29,7 @@
       font-weight: bold;
       padding: 16px;
       border-radius: 6px;
-      margin: 20px 0;
+      margin: 16px 0;
     }
     p.muted {
       color: #93a7ba;
@@ -33,22 +38,36 @@
   </style>
 </head>
 <body>
-  <h1>Kobo Page Turner — UWP build</h1>
-  <p>Download the latest package to sideload on Windows 10 Mobile.</p>
+  <h1>Kobo Page Turner</h1>
+  <p class="muted">Bluetooth page-turner remote for Kobo e-readers.</p>
+
+  <h2>Android</h2>
+  <p>Download the latest APK to sideload (enable "install unknown apps" for your browser/file manager).</p>
+  <a class="download" href="./kobopageturner.apk" download="KoboPageTurner.apk">Download kobopageturner.apk</a>
+  <p class="muted" id="androidVersionInfo">Loading version info...</p>
+
+  <h2>Windows 10 Mobile (UWP)</h2>
+  <p class="muted">Confirmed dead end: Windows blocks apps from publishing a local HID GATT service by policy. Kept here for reference only.</p>
   <a class="download" href="./app.appxbundle" download="KoboPageTurnerUWP.appxbundle">Download app.appxbundle</a>
-  <p class="muted">This link always points to the latest build pushed to this branch.</p>
-  <p class="muted" id="versionInfo">Loading version info...</p>
+  <p class="muted" id="uwpVersionInfo">Loading version info...</p>
+
+  <p class="muted">These links always point to the latest build pushed to this branch.</p>
+
   <script>
-    fetch("./version.json", { cache: "no-store" })
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        var el = document.getElementById("versionInfo");
-        var date = data.builtAt ? new Date(data.builtAt).toLocaleDateString() : "";
-        el.textContent = "Latest published version: " + data.version + (date ? " (" + date + ")" : "");
-      })
-      .catch(function () {
-        document.getElementById("versionInfo").textContent = "";
-      });
+    function loadVersion(path, elementId) {
+      fetch(path, { cache: "no-store" })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          var el = document.getElementById(elementId);
+          var date = data.builtAt ? new Date(data.builtAt).toLocaleDateString() : "";
+          el.textContent = "Latest published version: " + data.version + (date ? " (" + date + ")" : "");
+        })
+        .catch(function () {
+          document.getElementById(elementId).textContent = "";
+        });
+    }
+    loadVersion("./android-version.json", "androidVersionInfo");
+    loadVersion("./version.json", "uwpVersionInfo");
   </script>
 </body>
 </html>
