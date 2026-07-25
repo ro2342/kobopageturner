@@ -1,0 +1,12 @@
+# Visual Studio / UWP build output
+[Bb]in/
+[Oo]bj/
+AppPackages/
+BundleArtifacts/
+*.user
+*.suo
+.vs/
+
+# Windows
+Thumbs.db
+desktop.ini

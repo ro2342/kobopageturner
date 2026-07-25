@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kobo Page Turner — download</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background-color: #0a1f33;
+      color: #e8f0f7;
+      font-family: sans-serif;
+    }
+    h1 {
+      font-size: 1.3rem;
+    }
+    a.download {
+      display: block;
+      text-align: center;
+      background-color: #0a5a9c;
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: bold;
+      padding: 16px;
+      border-radius: 6px;
+      margin: 20px 0;
+    }
+    p.muted {
+      color: #93a7ba;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Kobo Page Turner — UWP build</h1>
+  <p>Download the latest package to sideload on Windows 10 Mobile.</p>
+  <a class="download" href="./app.appxbundle" download="KoboPageTurnerUWP.appxbundle">Download app.appxbundle</a>
+  <p class="muted">This link always points to the latest build pushed to this branch.</p>
+  <p class="muted" id="versionInfo">Loading version info...</p>
+  <script>
+    fetch("./version.json", { cache: "no-store" })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        var el = document.getElementById("versionInfo");
+        var date = data.builtAt ? new Date(data.builtAt).toLocaleDateString() : "";
+        el.textContent = "Latest published version: " + data.version + (date ? " (" + date + ")" : "");
+      })
+      .catch(function () {
+        document.getElementById("versionInfo").textContent = "";
+      });
+  </script>
+</body>
+</html>

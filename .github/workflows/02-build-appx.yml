@@ -1,0 +1,91 @@
+name: 02 - Build appxbundle (Windows 10 Mobile)
+
+# Runs automatically on every push that touches uwp/, and can also be
+# triggered manually from the Actions tab. Produces the .appxbundle ready
+# for sideload, published to app/ so app/index.html always links the latest
+# build.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "uwp/**"
+      - ".github/workflows/02-build-appx.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check that the sideload certificate exists
+        shell: pwsh
+        run: |
+          $pfx = "uwp/KoboPageTurnerUWP/KoboPageTurnerUWP_TemporaryKey.pfx"
+          if (-not (Test-Path $pfx)) {
+            Write-Error "Certificate not found at $pfx. Run the '01 - Generate signing certificate' workflow first (Actions tab, Run workflow button), wait for it to finish, then re-run this one."
+            exit 1
+          }
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install Windows 10 SDK 17763 (UWP metadata)
+        uses: GuillaumeFalourd/setup-windows10-sdk-action@v2.4
+        with:
+          sdk-version: 17763
+
+      - name: Restore NuGet packages and build the appxbundle
+        shell: cmd
+        run: |
+          msbuild uwp\KoboPageTurnerUWP\KoboPageTurnerUWP.csproj ^
+            /restore ^
+            /p:Configuration=Debug ^
+            /p:Platform=ARM ^
+            /p:AppxBundlePlatforms=ARM ^
+            /p:AppxBundle=Always ^
+            /p:UapAppxPackageBuildMode=SideloadOnly ^
+            /p:AppxPackageSigningEnabled=true ^
+            /p:PackageCertificateKeyFile=KoboPageTurnerUWP_TemporaryKey.pfx ^
+            /p:PackageCertificatePassword=KoboPageTurner2026! ^
+            /p:AppxPackageDir=%CD%\AppPackages\ ^
+            /verbosity:minimal
+
+      - name: Publish the appxbundle as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kobopageturner-appxbundle
+          path: AppPackages/**
+          if-no-files-found: error
+
+      - name: Publish the appxbundle and version.json to app/
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -Path AppPackages -Recurse -Filter *.appxbundle | Select-Object -First 1
+          if (-not $bundle) {
+            Write-Error "No .appxbundle found under AppPackages."
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path app | Out-Null
+          Copy-Item $bundle.FullName -Destination "app/app.appxbundle" -Force
+
+          [xml]$manifest = Get-Content "uwp/KoboPageTurnerUWP/Package.appxmanifest"
+          $version = $manifest.Package.Identity.Version
+          $builtAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $versionJson = @{ version = $version; builtAt = $builtAt } | ConvertTo-Json -Compress
+          Set-Content -Path "app/version.json" -Value $versionJson -NoNewline
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/app.appxbundle app/version.json
+          git diff --cached --quiet -- app/app.appxbundle app/version.json
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "app.appxbundle and version.json are already up to date, nothing to commit."
+          } else {
+            git commit -m "chore: update app/app.appxbundle and app/version.json (automated)"
+            git push
+          }
