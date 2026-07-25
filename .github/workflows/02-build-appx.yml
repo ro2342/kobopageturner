@@ -54,11 +54,12 @@ jobs:
         run: |
           msbuild uwp\KoboPageTurnerUWP\KoboPageTurnerUWP.csproj ^
             /restore ^
-            /p:Configuration=Debug ^
+            /p:Configuration=Release ^
             /p:Platform=ARM ^
             /p:AppxBundlePlatforms=ARM ^
             /p:AppxBundle=Always ^
             /p:UapAppxPackageBuildMode=SideloadOnly ^
+            /p:UseDotNetNativeToolchain=true ^
             /p:AppxPackageSigningEnabled=true ^
             /p:PackageCertificateKeyFile=KoboPageTurnerUWP_TemporaryKey.pfx ^
             /p:PackageCertificatePassword=KoboPageTurner2026! ^
