@@ -1,8 +1,13 @@
 package com.rodcarvalho.kobopageturner
 
 import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -49,73 +54,105 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     private val events = mutableStateListOf<String>()
+    private val boundService = mutableStateOf<BleForegroundService?>(null)
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val service = (binder as BleForegroundService.LocalBinder).service
+            service.onEvent = { line ->
+                events.add(0, line)
+                while (events.size > 60) {
+                    events.removeAt(events.size - 1)
+                }
+            }
+            boundService.value = service
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            boundService.value = null
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val ble = BlePeripheralService(applicationContext) { line ->
-            events.add(0, line)
-            while (events.size > 60) {
-                events.removeAt(events.size - 1)
+        val intent = Intent(this, BleForegroundService::class.java)
+        startForegroundService(intent)
+        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+
+        setContent {
+            val service = boundService.value
+            if (service != null) {
+                KoboPageTurnerApp(service, events)
             }
         }
-        setContent {
-            KoboPageTurnerApp(ble, events)
-        }
+    }
+
+    override fun onDestroy() {
+        unbindService(connection)
+        super.onDestroy()
     }
 }
 
 @Composable
-fun KoboPageTurnerApp(ble: BlePeripheralService, events: List<String>) {
+fun KoboPageTurnerApp(service: BleForegroundService, events: List<String>) {
+    val ble = service.ble
     var statusColor by remember { mutableStateOf(Color.Gray) }
     var statusDetail by remember { mutableStateOf("Checking Bluetooth…") }
     var showInfo by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    fun setStatus(color: Color, detail: String) {
+        statusColor = color
+        statusDetail = detail
+        service.updateNotification(detail)
+    }
+
     fun startBle() {
         if (!ble.isSupported()) {
-            statusColor = Color.Red
-            statusDetail = "This phone's Bluetooth doesn't support peripheral/GATT-server mode — this app can't work here."
+            setStatus(Color.Red, "This phone's Bluetooth doesn't support peripheral/GATT-server mode — this app can't work here.")
             return
         }
-        statusColor = Color(0xFFFFA500)
-        statusDetail = "Starting…"
+        setStatus(Color(0xFFFFA500), "Starting…")
         ble.start { success, error ->
             if (success) {
-                statusColor = Color(0xFFFFA500)
-                statusDetail = "Advertising as a keyboard. Open your Kobo's Bluetooth pairing screen and connect to this phone."
+                setStatus(Color(0xFFFFA500), "Advertising as a keyboard. Open your Kobo's Bluetooth pairing screen and connect to this phone.")
             } else {
-                statusColor = Color.Red
-                statusDetail = "Failed to start Bluetooth advertising: " + (error ?: "unknown error")
+                setStatus(Color.Red, "Failed to start Bluetooth advertising: " + (error ?: "unknown error"))
             }
         }
     }
 
     ble.onConnectionStateChanged = { hasSubscriber ->
         if (hasSubscriber) {
-            statusColor = Color(0xFF2E7D32)
-            statusDetail = "Connected — button presses will turn pages."
+            setStatus(Color(0xFF2E7D32), "Connected — button presses will turn pages.")
         } else {
-            statusColor = Color(0xFFFFA500)
-            statusDetail = "Advertising as a keyboard. Open your Kobo's Bluetooth pairing screen and connect to this phone."
+            setStatus(Color(0xFFFFA500), "Advertising as a keyboard. Open your Kobo's Bluetooth pairing screen and connect to this phone.")
         }
     }
 
     val permissions = remember {
+        val perms = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            arrayOf()
+            perms.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        perms.toTypedArray()
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        if (results.isEmpty() || results.values.all { it }) {
+        val bluetoothGranted = results
+            .filterKeys { it == Manifest.permission.BLUETOOTH_ADVERTISE || it == Manifest.permission.BLUETOOTH_CONNECT }
+            .values
+            .all { it }
+        if (results.isEmpty() || bluetoothGranted) {
             startBle()
         } else {
-            statusColor = Color.Red
-            statusDetail = "Bluetooth permission denied — grant it in Settings to use this app."
+            setStatus(Color.Red, "Bluetooth permission denied — grant it in Settings to use this app.")
         }
     }
 
