@@ -247,12 +247,21 @@ class BlePeripheralService(private val context: Context) {
     }
 
     private fun buildHidService(): BluetoothGattService {
+        // The HOGP spec requires HID devices to bond and use an encrypted link
+        // (LE Security Mode 1, Level 2+) — every characteristic/descriptor in
+        // this service uses *_ENCRYPTED permissions so Android forces the
+        // pairing/bonding handshake before allowing access. Without this, a
+        // host can read everything over an unbonded link, never goes through
+        // pairing, and apparently doesn't recognize the device as a trusted
+        // HID accessory at all (this is what happened on the first real-device
+        // test: the Kobo connected but treated the phone as a generic/audio
+        // device instead of a keyboard).
         val service = BluetoothGattService(SERVICE_HID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
 
         val hidInformation = BluetoothGattCharacteristic(
             CHAR_HID_INFORMATION,
             BluetoothGattCharacteristic.PROPERTY_READ,
-            BluetoothGattCharacteristic.PERMISSION_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED,
         )
         hidInformation.value = byteArrayOf(0x11, 0x01, 0x00, 0x02) // bcdHID 1.11 LE, country 0, flags RemoteWake
         service.addCharacteristic(hidInformation)
@@ -260,7 +269,7 @@ class BlePeripheralService(private val context: Context) {
         val reportMap = BluetoothGattCharacteristic(
             CHAR_REPORT_MAP,
             BluetoothGattCharacteristic.PROPERTY_READ,
-            BluetoothGattCharacteristic.PERMISSION_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED,
         )
         reportMap.value = REPORT_MAP
         service.addCharacteristic(reportMap)
@@ -268,7 +277,7 @@ class BlePeripheralService(private val context: Context) {
         val protocolMode = BluetoothGattCharacteristic(
             CHAR_PROTOCOL_MODE,
             BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
-            BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED or BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED,
         )
         protocolMode.value = byteArrayOf(0x01) // Report Protocol Mode
         service.addCharacteristic(protocolMode)
@@ -276,27 +285,27 @@ class BlePeripheralService(private val context: Context) {
         val controlPoint = BluetoothGattCharacteristic(
             CHAR_HID_CONTROL_POINT,
             BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
-            BluetoothGattCharacteristic.PERMISSION_WRITE,
+            BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED,
         )
         service.addCharacteristic(controlPoint)
 
         val report = BluetoothGattCharacteristic(
             CHAR_REPORT,
             BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-            BluetoothGattCharacteristic.PERMISSION_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED,
         )
         report.value = ByteArray(8)
 
         val reportReference = BluetoothGattDescriptor(
             DESCRIPTOR_REPORT_REFERENCE,
-            BluetoothGattDescriptor.PERMISSION_READ,
+            BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED,
         )
         reportReference.value = byteArrayOf(0x01, 0x01) // Report ID 1, Type Input
         report.addDescriptor(reportReference)
 
         val cccd = BluetoothGattDescriptor(
             DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION,
-            BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE,
+            BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED or BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED,
         )
         cccd.value = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
         report.addDescriptor(cccd)
