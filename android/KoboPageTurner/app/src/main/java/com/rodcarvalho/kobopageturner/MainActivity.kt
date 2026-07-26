@@ -9,12 +9,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -55,6 +56,9 @@ class MainActivity : ComponentActivity() {
 
     private val events = mutableStateListOf<String>()
     private val boundService = mutableStateOf<BleForegroundService?>(null)
+    private val permissionState = mutableStateOf(PermissionState.REQUESTING)
+
+    private var bound = false
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -73,23 +77,89 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Android 14+ requires a BLUETOOTH_ADVERTISE/BLUETOOTH_CONNECT permission
+    // to already be GRANTED before starting a foregroundServiceType=
+    // "connectedDevice" service, or startForeground() throws and takes the
+    // whole process down immediately. So permissions must be resolved first,
+    // strictly before the service (and therefore the rest of the UI) exists.
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val bluetoothGranted = results
+            .filterKeys { it == Manifest.permission.BLUETOOTH_ADVERTISE || it == Manifest.permission.BLUETOOTH_CONNECT }
+            .values
+            .all { it }
+        if (results.isEmpty() || bluetoothGranted) {
+            permissionState.value = PermissionState.GRANTED
+            startAndBindService()
+        } else {
+            permissionState.value = PermissionState.DENIED
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val intent = Intent(this, BleForegroundService::class.java)
-        startForegroundService(intent)
-        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+
+        val permissions = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(Manifest.permission.BLUETOOTH_ADVERTISE)
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }.toTypedArray()
+
+        if (permissions.isEmpty()) {
+            permissionState.value = PermissionState.GRANTED
+            startAndBindService()
+        } else {
+            permissionLauncher.launch(permissions)
+        }
 
         setContent {
             val service = boundService.value
-            if (service != null) {
-                KoboPageTurnerApp(service, events)
+            when {
+                service != null -> KoboPageTurnerApp(service, events)
+                permissionState.value == PermissionState.DENIED -> PermissionDeniedScreen {
+                    permissionLauncher.launch(permissions)
+                }
+                else -> {} // waiting on the permission dialog or the service to bind
             }
         }
     }
 
+    private fun startAndBindService() {
+        val intent = Intent(this, BleForegroundService::class.java)
+        startForegroundService(intent)
+        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        bound = true
+    }
+
     override fun onDestroy() {
-        unbindService(connection)
+        if (bound) {
+            unbindService(connection)
+        }
         super.onDestroy()
+    }
+}
+
+private enum class PermissionState { REQUESTING, GRANTED, DENIED }
+
+@Composable
+fun PermissionDeniedScreen(onRetry: () -> Unit) {
+    MaterialTheme {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text("Bluetooth permission is required for this app to advertise as a keyboard.")
+            Button(onClick = onRetry, modifier = Modifier.padding(top = 16.dp)) {
+                Text("Grant permission")
+            }
+        }
     }
 }
 
@@ -130,38 +200,8 @@ fun KoboPageTurnerApp(service: BleForegroundService, events: List<String>) {
         }
     }
 
-    val permissions = remember {
-        val perms = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            perms.add(Manifest.permission.BLUETOOTH_ADVERTISE)
-            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            perms.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        perms.toTypedArray()
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        val bluetoothGranted = results
-            .filterKeys { it == Manifest.permission.BLUETOOTH_ADVERTISE || it == Manifest.permission.BLUETOOTH_CONNECT }
-            .values
-            .all { it }
-        if (results.isEmpty() || bluetoothGranted) {
-            startBle()
-        } else {
-            setStatus(Color.Red, "Bluetooth permission denied — grant it in Settings to use this app.")
-        }
-    }
-
     LaunchedEffect(Unit) {
-        if (permissions.isEmpty()) {
-            startBle()
-        } else {
-            permissionLauncher.launch(permissions)
-        }
+        startBle()
     }
 
     MaterialTheme {

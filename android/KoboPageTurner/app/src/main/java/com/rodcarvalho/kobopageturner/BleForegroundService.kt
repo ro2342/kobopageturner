@@ -9,6 +9,7 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 
 // Hosts BlePeripheralService as a foreground service (type "connectedDevice")
 // instead of letting it live inside the Activity. A plain Activity-owned BLE
@@ -42,10 +43,19 @@ class BleForegroundService : Service() {
         )
 
         val notification = buildNotification("Starting…")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            // Should be unreachable now that MainActivity only starts this
+            // service after Bluetooth permissions are granted, but a crash
+            // here previously took down the whole app on launch — never
+            // let this method throw again.
+            Log.e(TAG, "startForeground failed", e)
+            stopSelf()
         }
     }
 
@@ -69,6 +79,7 @@ class BleForegroundService : Service() {
     }
 
     companion object {
+        private const val TAG = "BleForegroundService"
         private const val CHANNEL_ID = "kobo_page_turner_ble"
         private const val NOTIFICATION_ID = 1
     }
