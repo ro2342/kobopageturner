@@ -14,8 +14,13 @@ import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArraySet
 import kotlinx.coroutines.delay
@@ -34,18 +39,34 @@ enum class HidKeyCode(val code: Int) {
 // confirmed via the kshoji/BLE-HID-Peripheral-for-Android reference project
 // and the io.appground.blek Play Store app before building this.
 @SuppressLint("MissingPermission")
-class BlePeripheralService(private val context: Context) {
+class BlePeripheralService(
+    private val context: Context,
+    private val onEvent: (String) -> Unit = {},
+) {
 
     var onConnectionStateChanged: ((hasSubscriber: Boolean) -> Unit)? = null
 
     private val bluetoothManager =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val adapter = bluetoothManager.adapter
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
     private var gattServer: BluetoothGattServer? = null
     private var reportCharacteristic: BluetoothGattCharacteristic? = null
     private val subscribedDevices = CopyOnWriteArraySet<BluetoothDevice>()
     private var pendingStartResult: ((Boolean, String?) -> Unit)? = null
+
+    // Surfaces every GATT server callback in the app's UI so we can see
+    // exactly how far a real HID host (Kobo) gets — connect, service
+    // discovery, individual characteristic/descriptor reads and writes —
+    // without needing adb or a PC. There is no other way to see this on a
+    // real device from this machine.
+    private fun log(message: String) {
+        val line = "${timeFormat.format(Date())} $message"
+        Log.d(TAG, line)
+        mainHandler.post { onEvent(line) }
+    }
 
     fun isSupported(): Boolean {
         return adapter != null && adapter.isEnabled && adapter.bluetoothLeAdvertiser != null
@@ -53,8 +74,10 @@ class BlePeripheralService(private val context: Context) {
 
     fun start(onResult: (success: Boolean, error: String?) -> Unit) {
         try {
+            log("Opening GATT server…")
             val server = bluetoothManager.openGattServer(context, gattServerCallback)
             if (server == null) {
+                log("openGattServer returned null")
                 onResult(false, "Could not open GATT server")
                 return
             }
@@ -66,6 +89,7 @@ class BlePeripheralService(private val context: Context) {
 
             startAdvertising(onResult)
         } catch (e: Exception) {
+            log("start() threw: ${e.message}")
             onResult(false, e.message)
         }
     }
@@ -82,8 +106,13 @@ class BlePeripheralService(private val context: Context) {
     }
 
     suspend fun sendKey(key: HidKeyCode) {
-        val server = gattServer ?: return
-        val characteristic = reportCharacteristic ?: return
+        val server = gattServer
+        val characteristic = reportCharacteristic
+        if (server == null || characteristic == null) {
+            log("sendKey($key): GATT server not ready, ignored")
+            return
+        }
+        log("sendKey($key): notifying ${subscribedDevices.size} subscribed device(s)")
 
         val pressed = byteArrayOf(0, 0, key.code.toByte(), 0, 0, 0, 0, 0)
         notifyAll(server, characteristic, pressed)
@@ -130,11 +159,13 @@ class BlePeripheralService(private val context: Context) {
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+            log("Advertising started")
             pendingStartResult?.invoke(true, null)
             pendingStartResult = null
         }
 
         override fun onStartFailure(errorCode: Int) {
+            log("Advertising FAILED: error code $errorCode")
             pendingStartResult?.invoke(false, "advertise error code $errorCode")
             pendingStartResult = null
         }
@@ -142,11 +173,14 @@ class BlePeripheralService(private val context: Context) {
 
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
-            Log.d(TAG, "Service added: ${service.uuid} status=$status")
+            log("Service added: ${service.uuid} status=$status")
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            if (newState != BluetoothProfile.STATE_CONNECTED) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                log("GATT connected: ${device.address} bondState=${bondStateName(device.bondState)}")
+            } else {
+                log("GATT disconnected: ${device.address}")
                 subscribedDevices.remove(device)
                 onConnectionStateChanged?.invoke(subscribedDevices.isNotEmpty())
             }
@@ -158,6 +192,7 @@ class BlePeripheralService(private val context: Context) {
             offset: Int,
             characteristic: BluetoothGattCharacteristic,
         ) {
+            log("Read: ${characteristicName(characteristic.uuid)}")
             val value = characteristic.value ?: ByteArray(0)
             val response = if (offset > value.size) ByteArray(0) else value.copyOfRange(offset, value.size)
             gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, response)
@@ -172,6 +207,7 @@ class BlePeripheralService(private val context: Context) {
             offset: Int,
             value: ByteArray,
         ) {
+            log("Write: ${characteristicName(characteristic.uuid)} = ${value.joinToString(" ") { "%02x".format(it) }}")
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
             }
@@ -183,6 +219,7 @@ class BlePeripheralService(private val context: Context) {
             offset: Int,
             descriptor: BluetoothGattDescriptor,
         ) {
+            log("Descriptor read: ${descriptorName(descriptor.uuid)}")
             val value = descriptor.value ?: ByteArray(0)
             gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
         }
@@ -196,9 +233,11 @@ class BlePeripheralService(private val context: Context) {
             offset: Int,
             value: ByteArray,
         ) {
+            log("Descriptor write: ${descriptorName(descriptor.uuid)} = ${value.joinToString(" ") { "%02x".format(it) }}")
             if (descriptor.uuid == DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION) {
                 if (value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) {
                     subscribedDevices.add(device)
+                    log("Subscribed to Report notifications — a real host has never gotten this far before")
                 } else {
                     subscribedDevices.remove(device)
                 }
@@ -209,6 +248,31 @@ class BlePeripheralService(private val context: Context) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
             }
         }
+    }
+
+    private fun bondStateName(bondState: Int): String = when (bondState) {
+        BluetoothDevice.BOND_NONE -> "NONE"
+        BluetoothDevice.BOND_BONDING -> "BONDING"
+        BluetoothDevice.BOND_BONDED -> "BONDED"
+        else -> "unknown($bondState)"
+    }
+
+    private fun characteristicName(uuid: UUID): String = when (uuid) {
+        CHAR_HID_INFORMATION -> "HID Information"
+        CHAR_REPORT_MAP -> "Report Map"
+        CHAR_HID_CONTROL_POINT -> "HID Control Point"
+        CHAR_REPORT -> "Report"
+        CHAR_PROTOCOL_MODE -> "Protocol Mode"
+        CHAR_MANUFACTURER_NAME -> "Manufacturer Name"
+        CHAR_PNP_ID -> "PnP ID"
+        CHAR_BATTERY_LEVEL -> "Battery Level"
+        else -> uuid.toString()
+    }
+
+    private fun descriptorName(uuid: UUID): String = when (uuid) {
+        DESCRIPTOR_REPORT_REFERENCE -> "Report Reference"
+        DESCRIPTOR_CLIENT_CHARACTERISTIC_CONFIGURATION -> "CCCD"
+        else -> uuid.toString()
     }
 
     private fun buildDeviceInformationService(): BluetoothGattService {

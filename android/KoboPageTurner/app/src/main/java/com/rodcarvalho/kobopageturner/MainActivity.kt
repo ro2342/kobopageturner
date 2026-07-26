@@ -11,12 +11,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -27,6 +32,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -42,17 +48,24 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    private val events = mutableStateListOf<String>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val ble = BlePeripheralService(applicationContext)
+        val ble = BlePeripheralService(applicationContext) { line ->
+            events.add(0, line)
+            while (events.size > 60) {
+                events.removeAt(events.size - 1)
+            }
+        }
         setContent {
-            KoboPageTurnerApp(ble)
+            KoboPageTurnerApp(ble, events)
         }
     }
 }
 
 @Composable
-fun KoboPageTurnerApp(ble: BlePeripheralService) {
+fun KoboPageTurnerApp(ble: BlePeripheralService, events: List<String>) {
     var statusColor by remember { mutableStateOf(Color.Gray) }
     var statusDetail by remember { mutableStateOf("Checking Bluetooth…") }
     var showInfo by remember { mutableStateOf(false) }
@@ -203,9 +216,22 @@ fun KoboPageTurnerApp(ble: BlePeripheralService) {
                 },
                 title = { Text("Kobo Page Turner") },
                 text = {
-                    Text(
-                        statusDetail + "\n\nKobo Page Turner turns the phone into a Bluetooth keyboard so the Kobo's own \"Bluetooth accessories\" page-turn support recognizes it. Pair it from the Kobo's Bluetooth settings like any keyboard, then tap or swipe left/right on this screen."
-                    )
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(statusDetail)
+                        Text(
+                            "\nRecent Bluetooth activity (newest first) — what a connecting device actually did:",
+                            fontSize = 12.sp,
+                        )
+                        if (events.isEmpty()) {
+                            Text("(nothing yet)", fontSize = 12.sp)
+                        } else {
+                            LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
+                                items(events) { line ->
+                                    Text(line, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
                 },
             )
         }
